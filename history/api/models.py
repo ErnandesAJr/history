@@ -142,7 +142,6 @@ class DeviceHistory(object):
                 '$minDistance': int(pm_value[3]) if len(pm_value) == 4 else 0
             }}}
 
-        """  """
         elif 'unique' in request.params.keys() and 'attr' in request.params.keys():
             type_query = "aggregate"
             locate_unique = "$" + request.params['unique']
@@ -170,12 +169,6 @@ class DeviceHistory(object):
                     }
                 }
             ]
-
-        # elif 'deleteDevice' in request.params.keys():
-        #     type_query = "remove"
-        #     device_id = request.params['remove']
-        #     logger.info(str(device_id))
-        #     query = [{"device_id": device_id}]
 
         else:
             query = {'attr': attr, 'value': {'$ne': ' '}}
@@ -232,16 +225,11 @@ class DeviceHistory(object):
         if query['type'] == 'aggregate':
             cursor = collection.aggregate(query['query'])
 
-        if query['type'] == 'remove':
-            cursor = collection.delete_many({"device_id": '4be79d'})
-
-        if query['type'] != 'remove':
+        else:
             history = []
             for d in cursor:
                 d['ts'] = d['ts'].isoformat() + 'Z'
                 history.append(d)
-        else:
-            history = cursor
 
         return history
 
