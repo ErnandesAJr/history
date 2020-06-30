@@ -116,7 +116,7 @@ class DeviceHistory(object):
     @staticmethod
     def parse_request(request, attr):
         """ returns mongo compatible query object, based on the query params provided """
-
+        type_query = "find"
         if 'lastN' in request.params.keys():
             try:
                 limit_val = int(request.params['lastN'])
@@ -130,7 +130,8 @@ class DeviceHistory(object):
         else:
             limit_val = False
 
-        if 'near' in request.params.keys() and attr:
+        """ Returns locations near the specified latitude and longitude """
+        if 'near' in request.params.keys() and 'attr' in request.params.keys():
             pm_value = request.params['near']
             query = {'attr': attr, 'value': {'$near': {
                 '$geometry': {
@@ -141,21 +142,62 @@ class DeviceHistory(object):
                 '$minDistance': int(pm_value[3]) if len(pm_value) == 4 else 0
             }}}
 
-        elif attr:
+        """  """
+        elif 'unique' in request.params.keys() and 'attr' in request.params.keys():
+            type_query = "aggregate"
+            locate_unique = "$" + request.params['unique']
+            query = [
+                {
+                    "$sort": {
+                        "ts": 1
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": locate_unique,
+                        "value": {
+                            "$last": "$value"
+                        },
+                        "device_id": {
+                            "$last": "$device_id"
+                        },
+                        "ts": {
+                            "$last": "$ts"
+                        },
+                        "attr": {
+                            "$last": "$attr"
+                        }
+                    }
+                }
+            ]
+
+        # elif 'deleteDevice' in request.params.keys():
+        #     type_query = "remove"
+        #     device_id = request.params['remove']
+        #     logger.info(str(device_id))
+        #     query = [{"device_id": device_id}]
+
+        else:
             query = {'attr': attr, 'value': {'$ne': ' '}}
+
         ts_filter = {}
         if 'dateFrom' in request.params.keys():
             ts_filter['$gte'] = dateutil.parser.parse(
                 request.params['dateFrom'])
+
         if 'dateTo' in request.params.keys():
             ts_filter['$lte'] = dateutil.parser.parse(request.params['dateTo'])
+
         if len(ts_filter.keys()) > 0:
-            query['ts'] = ts_filter
+            if type_query == "find":
+                query['ts'] = ts_filter
+            if type_query == "aggregate":
+                query.append({"$math": {"ts": ts_filter}})
 
         ls_filter = {"_id": False, '@timestamp': False, '@version': False}
         sort = [('ts', pymongo.DESCENDING)]
 
-        return {'query': query, 'limit': limit_val, 'filter': ls_filter, 'sort': sort}
+        return {'query': query, 'limit': limit_val, 'filter': ls_filter, 'sort': sort, "type": type_query}
 
     @staticmethod
     def get_attrs(device_id, token):
@@ -163,6 +205,7 @@ class DeviceHistory(object):
         response = requests.get(
             conf.device_manager_url+'/device/'+device_id, headers={'Authorization': token})
         attrs_list = []
+        logger.info(str(response))
         json_data = json.loads(response.text)
 
         for k in json_data['attrs']:
@@ -173,19 +216,33 @@ class DeviceHistory(object):
 
     @staticmethod
     def get_single_attr(collection, query):
+        # //TODO: VALIDAR SE O DADO É DO TIPO GEOJSON, ACHO Q O MELHOR LUGAR PARA ISSO NÃO DEVA SER AQUI !
         try:
             collection.create_index([("value", "2dsphere")])
         except:
             pass
 
-        cursor = collection.find(query['query'],
-                                 query['filter'],
-                                 sort=query['sort'],
-                                 limit=query['limit'])
-        history = []
-        for d in cursor:
-            d['ts'] = d['ts'].isoformat() + 'Z'
-            history.append(d)
+        logger.info(str(query['type']))
+        if query['type'] == 'find':
+            cursor = collection.find(query['query'],
+                                     query['filter'],
+                                     sort=query['sort'],
+                                     limit=query['limit'])
+
+        if query['type'] == 'aggregate':
+            cursor = collection.aggregate(query['query'])
+
+        if query['type'] == 'remove':
+            cursor = collection.delete_many({"device_id": '4be79d'})
+
+        if query['type'] != 'remove':
+            history = []
+            for d in cursor:
+                d['ts'] = d['ts'].isoformat() + 'Z'
+                history.append(d)
+        else:
+            history = cursor
+
         return history
 
     @staticmethod
@@ -214,7 +271,10 @@ class DeviceHistory(object):
             history = {}
             token = req.get_header('authorization')
             attrs_list = DeviceHistory.get_attrs(device_id, token)
+            logger.info(attrs_list)
+
             for attr in attrs_list:
+                logger.info(attr)
                 query = DeviceHistory.parse_request(req, attr)
                 history[attr] = DeviceHistory.get_single_attr(
                     collection, query)
